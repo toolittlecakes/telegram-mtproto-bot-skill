@@ -424,6 +424,8 @@ await tg.downloadToFile(`${root}/scratch/out.jpg`, sent.media)
 await tg.sendMedia(chatId, { type: 'voice', file: Bun.file(`${root}/scratch/msg.ogg`), duration: 231 }, { caption: 'подпись' })
 ```
 
+`duration` (секунды, из ffprobe) для voice/audio обязателен: mtcute не пробит файл и молча шлёт `duration: 0`, а Telegram тогда показывает 00:00 (на коротких файлах клиент маскирует это, декодируя автоскачанный файл).
+
 Сырой TL-вызов, когда высокоуровневого метода нет:
 
 ```ts
