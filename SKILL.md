@@ -342,18 +342,35 @@ await withBot(async tg => {
 
 Запускать из `~/.tg-agent-bot` с `MTCUTE_LOG_LEVEL=1 bun scratch/check-start.ts`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
 
-Всё ниже прогнано на реальном Telegram в старой группе: `sendText` обычный и с `html`, `replyTo`, `editMessage`, `sendReaction`, `pinMessage`, `unpinMessage`, `getMessages` с перечиткой текста, `getFullChat`, `getChatMembers`, `getFullUser`, `sendMedia`, `downloadToFile`, `deleteMessagesById`, сырой `tg.call`, резолв по публичному `@username`. Отдельно подтверждены отказы сервера: `BOT_METHOD_INVALID` на `getHistory` и `SCHEDULE_BOT_NOT_ALLOWED` на `schedule`.
+Всё ниже прогнано на реальном Telegram в старой группе: `sendText` обычный и с форматированием (`thtml`, многострочный пост с цитатами), `replyTo`, `editMessage`, `sendReaction`, `pinMessage`, `unpinMessage`, `getMessages` с перечиткой текста, `getFullChat`, `getChatMembers`, `getFullUser`, `sendMedia`, `downloadToFile`, `deleteMessagesById`, сырой `tg.call`, резолв по публичному `@username`. Отдельно подтверждены отказы сервера: `BOT_METHOD_INVALID` на `getHistory` и `SCHEDULE_BOT_NOT_ALLOWED` на `schedule`.
 
 Отдельно прогнано в канале, где бот админ: `resolvePeer`/`getChat` по `@username`, `getFullChat`, `getChatMembers` со статусами и правами, `sendText`, `editMessage`, `sendReaction`, `pinMessage` с перечиткой `pinnedMsgId`, `unpinMessage`, `sendMedia`, `downloadToFile` чужого медиа, `deleteMessagesById`. В публичном канале, где бота нет, работают чтение по ID и резолв.
 
 Не проверено вызовом: форум-топики, стикеры, платежи, бан и приглашения. Сигнатуру перед использованием сверять командой из раздела 3, результат проверять по разделу 5.
 
-Отправка с форматированием:
+Отправка с форматированием - только через `thtml`, не `html`:
 
 ```ts
-import { html } from '@mtcute/bun'
-const msg = await tg.sendText(chatId, html`Привет, <b>${name}</b>`)
+import { thtml } from '@mtcute/html-parser'
+const msg = await tg.sendText(chatId, thtml`<b>Заголовок</b>
+
+Абзац с <i>курсивом</i>, <code>кодом</code> и <a href="https://example.com">ссылкой</a>
+<blockquote>Цитата</blockquote>`)
 ```
+
+`html` из `@mtcute/bun` схлопывает переносы строк и повторные пробелы как браузер - многострочный пост превращается в одну простыню, а ошибки нет. Проверено на реальном посте: 49 строк ушли одним абзацем. `thtml` сохраняет whitespace как есть (поведение Bot API). Символы `<`, `>`, `&` в тексте экранировать как `&lt;`, `&gt;`, `&amp;`; лимит 4096 считается по чистому тексту без тегов, превышение - серверный `MESSAGE_TOO_LONG`. Проверка по разделу 5: перечитать сообщение и сверить `raw.entities.length` и число строк в `text`, а не только сам факт отправки.
+
+Чтение форматирования. `text` у сообщения - голый текст, разметка лежит отдельно в `entities` (bold, italic, blockquote, code, textUrl). Если важно, что автор выделил, а не только что написал, разворачивать обратно в HTML:
+
+```ts
+import { thtml } from '@mtcute/html-parser'
+const [m] = await tg.getMessages(chatId, [msgId])
+const formatted = thtml.unparse({ text: m.text, entities: m.entities.map(e => e.raw) })
+```
+
+Брать `m.raw.entities` нельзя: `raw` - union с сервисным сообщением, у которого entities нет, и typecheck это ловит.
+
+Это же нужно, чтобы взять чужой пост как референс формата или переслать его без потери разметки.
 
 Ответ, правка, реакция, пин, удаление:
 
