@@ -10,12 +10,16 @@ export const ROOT = `${homedir()}/.tg-agent-bot`
  * доступны все 326 методов. Модуль снимает только неизменную церемонию
  * жизненного цикла - её забытый destroy вешает процесс и лочит сессию.
  */
-export async function withBot<T>(fn: (tg: TelegramClient) => Promise<T>): Promise<T> {
+export async function withBot<T>(
+  fn: (tg: TelegramClient) => Promise<T>,
+  options: { logLevel?: number } = {},
+): Promise<T> {
   const cfg = JSON.parse(readFileSync(`${ROOT}/config.json`, 'utf8'))
   const tg = new TelegramClient({
     apiId: cfg.apiId,
     apiHash: cfg.apiHash,
     storage: `${ROOT}/session/bot`,
+    logLevel: options.logLevel ?? cfg.logLevel ?? 1,
   })
   try {
     await tg.start({ botToken: cfg.botToken })

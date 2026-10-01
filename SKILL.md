@@ -53,7 +53,7 @@ bash "$SKILL_DIR/bootstrap.sh"
 Разовая задача пишется прямо в heredoc, без файла:
 
 ```bash
-MTCUTE_LOG_LEVEL=1 bun run - <<TS
+bun run - <<TS
 import { withBot } from '$HOME/.tg-agent-bot/lib/bot.ts'
 
 await withBot(async tg => {
@@ -76,14 +76,14 @@ await withBot(async tg => {
 ```
 
 ```bash
-cd ~/.tg-agent-bot && MTCUTE_LOG_LEVEL=1 bun scratch/<имя>.ts
+cd ~/.tg-agent-bot && bun scratch/<имя>.ts
 ```
 
 Запускать строго из корня папки - иначе не разрешится `@mtcute/bun`.
 
 Исключение внутри колбэка пробрасывается наружу, клиент при этом закрывается, процесс отдаёт `exit 1`. Ошибку не глушить: падение с трейсом - штатный исход.
 
-`MTCUTE_LOG_LEVEL=1` оставляет только ошибки. По умолчанию уровень 2 (warn), и рабочий вывод легко тонет в штатном шуме вида `[WRN] Telegram is having internal issues: 500:MSGID_DECREASE_RETRY, retrying in 1s` - это транзиентное, mtcute ретраит сам, вмешательства не требует.
+`withBot` по умолчанию задаёт `logLevel: 1` (только ошибки), чтобы рабочий вывод не тонул в штатных предупреждениях о транзиентных ошибках, которые mtcute ретраит сам. Для постоянной настройки можно задать `logLevel` в `config.json`, для отдельного запуска — передать второй аргумент: `withBot(async tg => { /* работа */ }, { logLevel: 2 })`. Приоритет: параметр вызова → конфиг → `1`. Уровень передаётся в конструктор клиента и имеет приоритет над `MTCUTE_LOG_LEVEL`; задавать env-переменную перед скриптом не нужно.
 
 Правила запуска:
 
@@ -100,7 +100,7 @@ Bun исполняет TypeScript без type-check: обращение к не�
 
 ```bash
 bash "$SKILL_DIR/scripts/typecheck.sh" scratch/<имя>.ts
-cd ~/.tg-agent-bot && MTCUTE_LOG_LEVEL=1 bun --install=force run scratch/<имя>.ts
+cd ~/.tg-agent-bot && bun --install=force run scratch/<имя>.ts
 ```
 
 Для быстрой проверки ключевого различия между raw TL и high-level API запускать `bash "$SKILL_DIR/scripts/typecheck.sh" --probe-message-api`: у raw `tl.message` исходящее определяется через `message.out`, а у high-level `Message`, который возвращает `getMessages`, через `message.isOutgoing`. Незнакомые поля дополнительно сверять с установленными `.d.ts` по разделу 3; успешный `bun run` не является проверкой типов.
@@ -340,7 +340,7 @@ await withBot(async tg => {
 })
 ```
 
-Запускать из `~/.tg-agent-bot` с `MTCUTE_LOG_LEVEL=1 bun scratch/check-start.ts`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
+Запускать из `~/.tg-agent-bot` с `bun scratch/check-start.ts`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
 
 Всё ниже прогнано на реальном Telegram в старой группе: `sendText` обычный и с форматированием (`thtml`, многострочный пост с цитатами), `replyTo`, `editMessage`, `sendReaction`, `pinMessage`, `unpinMessage`, `getMessages` с перечиткой текста, `getFullChat`, `getChatMembers`, `getFullUser`, `sendMedia`, `downloadToFile`, `deleteMessagesById`, сырой `tg.call`, резолв по публичному `@username`. Отдельно подтверждены отказы сервера: `BOT_METHOD_INVALID` на `getHistory` и `SCHEDULE_BOT_NOT_ALLOWED` на `schedule`.
 
