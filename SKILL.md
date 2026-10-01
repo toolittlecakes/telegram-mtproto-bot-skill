@@ -5,7 +5,7 @@ description: Действия Telegram-ботом через MTProto (mtcute) о
 
 # Telegram bot через MTProto
 
-Инструмент - не CLI, а папка `~/.tg-agent-bot` с установленной библиотекой. Каждая задача решается одноразовым скриптом в `scratch/`, который запускается из этой папки. Библиотека там же служит источником документации по API.
+Инструмент - не CLI, а папка `~/.tg-agent-bot` с установленной библиотекой. Каждая задача решается одноразовым скриптом в heredoc или в `scratch/`; запускать можно из любой рабочей папки. Библиотека там же служит источником документации по API.
 
 ## 1. Bootstrap
 
@@ -53,7 +53,7 @@ bash "$SKILL_DIR/bootstrap.sh"
 Разовая задача пишется прямо в heredoc, без файла:
 
 ```bash
-bun run - <<TS
+bun --no-install run - <<TS
 import { withBot } from '$HOME/.tg-agent-bot/lib/bot.ts'
 
 await withBot(async tg => {
@@ -76,10 +76,12 @@ await withBot(async tg => {
 ```
 
 ```bash
-cd ~/.tg-agent-bot && bun scratch/<имя>.ts
+bun --no-install run "$HOME/.tg-agent-bot/scratch/<имя>.ts"
 ```
 
-Запускать строго из корня папки - иначе не разрешится `@mtcute/bun`.
+Рабочая папка не обязана быть `~/.tg-agent-bot`: зависимости внутри `lib/bot.ts` разрешаются относительно самого модуля, а пути к конфигу и сессии абсолютные. Запускать с `--no-install`, чтобы использовать установленные зависимости из `node_modules`; отсутствующий пакет должен дать явную ошибку. Не использовать `--install=force`: он может выбрать другую версию из кеша, чем та, по которой читается документация и выполняется type-check.
+
+Прямые импорты пакетов в самом скрипте разрешаются относительно этого скрипта. Поэтому скрипты с `import ... from '@mtcute/bun'` или `'@mtcute/html-parser'` сохранять в `~/.tg-agent-bot/scratch/` и запускать по абсолютному пути. Для таких импортов в heredoc рабочей папкой должна быть `~/.tg-agent-bot`; абсолютный импорт `lib/bot.ts` сам по себе не меняет разрешение соседних импортов. Относительные пути к файлам данных по-прежнему зависят от рабочей папки — использовать абсолютные.
 
 Исключение внутри колбэка пробрасывается наружу, клиент при этом закрывается, процесс отдаёт `exit 1`. Ошибку не глушить: падение с трейсом - штатный исход.
 
@@ -100,14 +102,14 @@ Bun исполняет TypeScript без type-check: обращение к не�
 
 ```bash
 bash "$SKILL_DIR/scripts/typecheck.sh" scratch/<имя>.ts
-cd ~/.tg-agent-bot && bun --install=force run scratch/<имя>.ts
+bun --no-install run "$HOME/.tg-agent-bot/scratch/<имя>.ts"
 ```
 
 Для быстрой проверки ключевого различия между raw TL и high-level API запускать `bash "$SKILL_DIR/scripts/typecheck.sh" --probe-message-api`: у raw `tl.message` исходящее определяется через `message.out`, а у high-level `Message`, который возвращает `getMessages`, через `message.isOutgoing`. Незнакомые поля дополнительно сверять с установленными `.d.ts` по разделу 3; успешный `bun run` не является проверкой типов.
 
 ## 3. Поиск по API
 
-Документация берётся из установленного пакета, а не из памяти и не из интернета. Она всегда соответствует той версии, которой пользуется скрипт. Все команды выполняются из `~/.tg-agent-bot`.
+Документация берётся из установленного пакета, а не из памяти и не из интернета. Для запусков по разделу 2 это та же установленная версия, которую используют runtime и type-check. Только команды ниже выполняются из `~/.tg-agent-bot`, поскольку в них сокращены пути к `node_modules`; это не требование к запуску скриптов.
 
 Найти высокоуровневый метод по смыслу (326 методов):
 
@@ -132,7 +134,7 @@ awk -v m="getChatMembers" '/\/\*\*/{buf=""} {buf=buf"\n"$0} $0 ~ "^    "m"\\(" {
 Проверить сырой TL-метод, если высокоуровневого нет (808 методов, поле `available`):
 
 ```bash
-bun -e 'const s=require("./node_modules/@mtcute/core/tl/api-schema.json"); for (const e of s.e) if (e.kind==="method" && /getParticipants/.test(e.name)) console.log(String(e.available).padEnd(5), e.name)'
+bun --no-install -e 'const s=require("./node_modules/@mtcute/core/tl/api-schema.json"); for (const e of s.e) if (e.kind==="method" && /getParticipants/.test(e.name)) console.log(String(e.available).padEnd(5), e.name)'
 ```
 
 Порядок действий при незнакомой задаче: искать высокоуровневый метод, проверить его `**Available**`, при отсутствии метода искать сырой в схеме, при `available: both` или `bot` звать через `tg.call({ _: 'namespace.method', ... })` с типизированными аргументами.
@@ -340,7 +342,7 @@ await withBot(async tg => {
 })
 ```
 
-Запускать из `~/.tg-agent-bot` с `bun scratch/check-start.ts`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
+Запускать из любой папки с `bun --no-install run "$HOME/.tg-agent-bot/scratch/check-start.ts"`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
 
 Всё ниже прогнано на реальном Telegram в старой группе: `sendText` обычный и с форматированием (`thtml`, многострочный пост с цитатами), `replyTo`, `editMessage`, `sendReaction`, `pinMessage`, `unpinMessage`, `getMessages` с перечиткой текста, `getFullChat`, `getChatMembers`, `getFullUser`, `sendMedia`, `downloadToFile`, `deleteMessagesById`, сырой `tg.call`, резолв по публичному `@username`. Отдельно подтверждены отказы сервера: `BOT_METHOD_INVALID` на `getHistory` и `SCHEDULE_BOT_NOT_ALLOWED` на `schedule`.
 
