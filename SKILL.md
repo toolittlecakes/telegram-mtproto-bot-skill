@@ -5,7 +5,7 @@ description: Действия Telegram-ботом через MTProto (mtcute) о
 
 # Telegram bot через MTProto
 
-Инструмент - не CLI, а папка `~/.tg-agent-bot` с установленной библиотекой. Каждая задача решается одноразовым скриптом в heredoc или в `scratch/`; запускать можно из любой рабочей папки. Библиотека там же служит источником документации по API.
+Инструмент - не CLI, а папка `~/.tg-agent-bot` с установленной библиотекой. Каждая задача решается одноразовым скриптом в heredoc или в `scratch/`; команду можно вызывать из любой папки, явно задавая Bun контекст проекта через `--cwd "$HOME/.tg-agent-bot"`. Библиотека там же служит источником документации по API.
 
 ## 1. Bootstrap
 
@@ -53,8 +53,8 @@ bash "$SKILL_DIR/bootstrap.sh"
 Разовая задача пишется прямо в heredoc, без файла:
 
 ```bash
-bun --no-install run - <<TS
-import { withBot } from '$HOME/.tg-agent-bot/lib/bot.ts'
+bun run --cwd "$HOME/.tg-agent-bot" --no-install - <<'TS'
+import { withBot } from './lib/bot.ts'
 
 await withBot(async tg => {
   const m = await tg.sendText({ _: 'inputPeerChat', chatId: 5127221342 }, 'текст')
@@ -63,7 +63,7 @@ await withBot(async tg => {
 TS
 ```
 
-Делимитер `TS` **не в кавычках** - иначе `$HOME` не подставится и импорт не разрешится. Обратная сторона: шелл лезет и в остальной текст, поэтому шаблонные строки TypeScript (`${...}`) надо экранировать как `\${...}`. Экранировать сам `$HOME` при этом нельзя - импорт сломается. Если шаблонных строк много, дешевле положить файл.
+Делимитер `'TS'` всегда в кавычках: shell передаёт тело скрипта без подстановок, поэтому `${...}`, обратные кавычки и `$` в TypeScript не требуют shell-экранирования. `$HOME` раскрывается только в аргументе `--cwd`, вне heredoc.
 
 Файл кладётся в `~/.tg-agent-bot/scratch/<имя>.ts` и импортирует модуль относительным путём:
 
@@ -76,12 +76,12 @@ await withBot(async tg => {
 ```
 
 ```bash
-bun --no-install run "$HOME/.tg-agent-bot/scratch/<имя>.ts"
+bun run --cwd "$HOME/.tg-agent-bot" --no-install scratch/<имя>.ts
 ```
 
-Рабочая папка не обязана быть `~/.tg-agent-bot`: зависимости внутри `lib/bot.ts` разрешаются относительно самого модуля, а пути к конфигу и сессии абсолютные. Запускать с `--no-install`, чтобы использовать установленные зависимости из `node_modules`; отсутствующий пакет должен дать явную ошибку. Не использовать `--install=force`: он может выбрать другую версию из кеша, чем та, по которой читается документация и выполняется type-check.
+Для heredoc и сохранённых скриптов использовать один запуск: `bun run --cwd "$HOME/.tg-agent-bot" --no-install ...`. `--cwd` задаёт рабочую папку процесса: heredoc, скрипты в `scratch/` и `lib/bot.ts` используют установленные зависимости проекта. Нужные функции импортировать напрямую из пакетов (`@mtcute/bun`, `@mtcute/html-parser` и других), без реэкспортов через `bot.ts`. `--no-install` запрещает автоустановку; отсутствующий пакет должен дать явную ошибку. Не использовать `--install=force`: он может выбрать другую версию из кеша, чем та, по которой читается документация и выполняется type-check.
 
-Прямые импорты пакетов в самом скрипте разрешаются относительно этого скрипта. Поэтому скрипты с `import ... from '@mtcute/bun'` или `'@mtcute/html-parser'` сохранять в `~/.tg-agent-bot/scratch/` и запускать по абсолютному пути. Для таких импортов в heredoc рабочей папкой должна быть `~/.tg-agent-bot`; абсолютный импорт `lib/bot.ts` сам по себе не меняет разрешение соседних импортов. Относительные пути к файлам данных по-прежнему зависят от рабочей папки — использовать абсолютные.
+Относительные пути к файлам данных теперь считаются от `~/.tg-agent-bot`. Для файлов вне проекта использовать абсолютные пути.
 
 Исключение внутри колбэка пробрасывается наружу, клиент при этом закрывается, процесс отдаёт `exit 1`. Ошибку не глушить: падение с трейсом - штатный исход.
 
@@ -102,7 +102,7 @@ Bun исполняет TypeScript без type-check: обращение к не�
 
 ```bash
 bash "$SKILL_DIR/scripts/typecheck.sh" scratch/<имя>.ts
-bun --no-install run "$HOME/.tg-agent-bot/scratch/<имя>.ts"
+bun run --cwd "$HOME/.tg-agent-bot" --no-install scratch/<имя>.ts
 ```
 
 Для быстрой проверки ключевого различия между raw TL и high-level API запускать `bash "$SKILL_DIR/scripts/typecheck.sh" --probe-message-api`: у raw `tl.message` исходящее определяется через `message.out`, а у high-level `Message`, который возвращает `getMessages`, через `message.isOutgoing`. Незнакомые поля дополнительно сверять с установленными `.d.ts` по разделу 3; успешный `bun run` не является проверкой типов.
@@ -342,7 +342,7 @@ await withBot(async tg => {
 })
 ```
 
-Запускать из любой папки с `bun --no-install run "$HOME/.tg-agent-bot/scratch/check-start.ts"`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
+Запускать из любой папки с `bun run --cwd "$HOME/.tg-agent-bot" --no-install scratch/check-start.ts`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
 
 Всё ниже прогнано на реальном Telegram в старой группе: `sendText` обычный и с форматированием (`thtml`, многострочный пост с цитатами), `replyTo`, `editMessage`, `sendReaction`, `pinMessage`, `unpinMessage`, `getMessages` с перечиткой текста, `getFullChat`, `getChatMembers`, `getFullUser`, `sendMedia`, `downloadToFile`, `deleteMessagesById`, сырой `tg.call`, резолв по публичному `@username`. Отдельно подтверждены отказы сервера: `BOT_METHOD_INVALID` на `getHistory` и `SCHEDULE_BOT_NOT_ALLOWED` на `schedule`.
 
