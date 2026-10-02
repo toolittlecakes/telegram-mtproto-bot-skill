@@ -58,8 +58,12 @@ import { withBot } from './lib/bot.ts'
 
 await withBot(async tg => {
   const m = await tg.sendText({ _: 'inputPeerChat', chatId: 5127221342 }, 'текст')
-  console.log('sent', m.id)
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(`sent ${m.id}\n`, error => error ? reject(error) : resolve())
+  })
 })
+
+process.exit(0)
 TS
 ```
 
@@ -73,6 +77,8 @@ import { withBot } from '../lib/bot'
 await withBot(async tg => {
   // работа
 })
+
+process.exit(0)
 ```
 
 ```bash
@@ -84,6 +90,10 @@ bun run --cwd "$HOME/.tg-agent-bot" --no-install scratch/<имя>.ts
 Относительные пути к файлам данных теперь считаются от `~/.tg-agent-bot`. Для файлов вне проекта использовать абсолютные пути.
 
 Исключение внутри колбэка пробрасывается наружу, клиент при этом закрывается, процесс отдаёт `exit 1`. Ошибку не глушить: падение с трейсом - штатный исход.
+
+Одноразовый скрипт явно завершать через `process.exit(0)` только после успешного `await withBot(...)` и всех остальных операций. Для stdout/stderr ждать callback записи самих данных через `stream.write`, как в примерах; файловые записи тоже дожидаться. Не полагаться на `console.log` или callback пустой записи перед выходом: в Bun 1.3.3 большой вывод в pipe может обрезаться. `Bun.write(Bun.stdout, ...)` после инициализации `process.stdout` в этой версии также может зависнуть; проверенный путь здесь — callback фактической записи через `process.stdout.write` / `process.stderr.write`.
+
+Это видимый обход дефекта mtcute: даже после возврата `destroy()` фоновые таймеры могут удерживать процесс; воспроизведение гонок подтверждено и на 0.32.3. Выходом владеет сам скрипт, `withBot` процесс не завершает. Не ставить `process.exit(0)` в `finally` или `catch`: ошибки должны оставаться ошибками. Если завис сам `destroy()`, до этой строки выполнение не дойдёт — такой случай требует отдельной диагностики. Ошибку `Session is reset` этот выход не устраняет и не скрывает.
 
 `withBot` по умолчанию задаёт `logLevel: 1` (только ошибки), чтобы рабочий вывод не тонул в штатных предупреждениях о транзиентных ошибках, которые mtcute ретраит сам. Для постоянной настройки можно задать `logLevel` в `config.json`, для отдельного запуска — передать второй аргумент: `withBot(async tg => { /* работа */ }, { logLevel: 2 })`. Приоритет: параметр вызова → конфиг → `1`. Уровень передаётся в конструктор клиента и имеет приоритет над `MTCUTE_LOG_LEVEL`; задавать env-переменную перед скриптом не нужно.
 
@@ -322,14 +332,17 @@ await withBot(async tg => {
         throw new Error(`Failed to verify incoming /start message ${message.id}`)
       }
 
-      console.log(JSON.stringify({
+      const output = JSON.stringify({
         messageId: message.id,
         date: message.date,
         userId: peer.id,
         displayName: peer.displayName,
         username: peer.username,
         text: message.message,
-      }))
+      })
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(output + '\n', error => error ? reject(error) : resolve())
+      })
     }
 
     if (diff._ === 'updates.difference') return
@@ -340,6 +353,8 @@ await withBot(async tg => {
     }
   }
 })
+
+process.exit(0)
 ```
 
 Запускать из любой папки с `bun run --cwd "$HOME/.tg-agent-bot" --no-install scratch/check-start.ts`, затем удалить скрипт. `updates.differenceSlice` обрабатывается циклом до финального `updates.difference`; `updates.differenceTooLong` — явный отказ, а не повод молча переключаться на кеш `peers`. Таблица `peers` годится только как диагностический след уже встреченного пользователя, не как доказательство конкретного сообщения.
