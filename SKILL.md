@@ -1,6 +1,6 @@
 ---
 name: telegram-mtproto-bot
-description: Действия Telegram-ботом через MTProto (mtcute) одноразовыми TypeScript-скриптами. Использовать для любой работы ботом - отправить, отредактировать, удалить сообщение, проверить новые апдейты и входящие /start, реакции, пины, прочитать сообщения включая старые и всю историю чата (запрет getHistory для ботов обходится перебором ID - рецепт внутри), участников чата, полные данные о юзере/чате/канале, загрузить или скачать медиа из любых доступных сообщений, администрировать каналы, работать с форум-топиками, стикерами, платежами и raw TL-методами. Это единый путь для действий ботом, отдельного CLI нет.
+description: Действия Telegram-ботом через MTProto (mtcute) одноразовыми TypeScript-скриптами. Использовать для любой работы ботом - отправить, отредактировать, удалить сообщение, проверить новые апдейты и входящие /start, реакции, пины, прочитать сообщения по ID и доступную историю с проверкой полноты, участников чата, полные данные о юзере/чате/канале, загрузить или скачать медиа из любых доступных сообщений, администрировать каналы, работать с форум-топиками, стикерами, платежами и raw TL-методами. Это единый путь для действий ботом, отдельного CLI нет.
 ---
 
 # Telegram bot через MTProto
@@ -48,19 +48,18 @@ bash "$SKILL_DIR/bootstrap.sh"
 
 ## 2. Как писать скрипт
 
-Церемонию жизненного цикла - чтение конфига, конструктор, `start`, `destroy` - берёт на себя `~/.tg-agent-bot/lib/bot.ts`, который раскладывает bootstrap. Единственный экспорт `withBot` отдаёт в колбэк сырой `TelegramClient`: доступны все методы, никаких обёрток поверх API нет и заводить их не нужно.
+Церемонию жизненного цикла - чтение конфига, конструктор, `start`, `destroy` - берёт на себя `~/.tg-agent-bot/lib/bot.ts`, который раскладывает bootstrap. `withBot` отдаёт в колбэк сырой `TelegramClient`: доступны все методы mtcute. Общие модули в `lib/` сохраняют проверенные алгоритмы, а скрипт собирает из них конкретную задачу; прямой доступ к API остаётся.
 
 Разовая задача пишется прямо в heredoc, без файла:
 
 ```bash
 bun run --cwd "$HOME/.tg-agent-bot" --no-install - <<'TS'
 import { withBot } from './lib/bot.ts'
+import { writeOutput } from './lib/output.ts'
 
 await withBot(async tg => {
   const m = await tg.sendText({ _: 'inputPeerChat', chatId: 5127221342 }, 'текст')
-  await new Promise<void>((resolve, reject) => {
-    process.stdout.write(`sent ${m.id}\n`, error => error ? reject(error) : resolve())
-  })
+  await writeOutput(`sent ${m.id}\n`)
 })
 
 process.exit(0)
@@ -91,7 +90,7 @@ bun run --cwd "$HOME/.tg-agent-bot" --no-install scratch/<имя>.ts
 
 Исключение внутри колбэка пробрасывается наружу, клиент при этом закрывается, процесс отдаёт `exit 1`. Ошибку не глушить: падение с трейсом - штатный исход.
 
-Одноразовый скрипт явно завершать через `process.exit(0)` только после успешного `await withBot(...)` и всех остальных операций. Для stdout/stderr ждать callback записи самих данных через `stream.write`, как в примерах; файловые записи тоже дожидаться. Не полагаться на `console.log` или callback пустой записи перед выходом: в Bun 1.3.3 большой вывод в pipe может обрезаться. `Bun.write(Bun.stdout, ...)` после инициализации `process.stdout` в этой версии также может зависнуть; проверенный путь здесь — callback фактической записи через `process.stdout.write` / `process.stderr.write`.
+Одноразовый скрипт явно завершать через `process.exit(0)` только после успешного `await withBot(...)` и всех остальных операций. Для stdout/stderr использовать `await writeOutput(text)` / `await writeOutput(text, process.stderr)`: модуль ждёт callback фактической записи. Файловые записи тоже дожидаться. Не полагаться на `console.log` или callback пустой записи перед выходом: в Bun 1.3.3 большой вывод в pipe может обрезаться. `Bun.write(Bun.stdout, ...)` после инициализации `process.stdout` в этой версии также может зависнуть; проверенный путь здесь — callback фактической записи через `process.stdout.write` / `process.stderr.write`.
 
 Это видимый обход дефекта mtcute: даже после возврата `destroy()` фоновые таймеры могут удерживать процесс; воспроизведение гонок подтверждено и на 0.32.3. Выходом владеет сам скрипт, `withBot` процесс не завершает. Не ставить `process.exit(0)` в `finally` или `catch`: ошибки должны оставаться ошибками. Если завис сам `destroy()`, до этой строки выполнение не дойдёт — такой случай требует отдельной диагностики. Ошибку `Session is reset` этот выход не устраняет и не скрывает.
 
@@ -102,9 +101,16 @@ bun run --cwd "$HOME/.tg-agent-bot" --no-install scratch/<имя>.ts
 - Сессия одна и общая, `session/bot`. Не заводить вторую и не запускать два скрипта одновременно.
 - Не вызывать `startUpdatesLoop()` и не поднимать `Dispatcher`. Скрипты одноразовые, апдейты им не нужны, а без них не копится расхождение состояния.
 - Не конструировать `TelegramClient` руками - только через `withBot`. Забытый `destroy()` вешает процесс и лочит общую сессию, и это единственная причина, по которой модуль вообще существует.
-- Не наращивать `lib/` обёртками над методами API (`sendMessage(chat, text)` и подобным). Это воссоздаёт CLI со всеми его болезнями: обёртки отстают от библиотеки и прячут остальные 326 методов. Модуль отвечает за жизненный цикл, работа с API живёт в скрипте.
-- `lib/bot.ts` перезаписывается bootstrap'ом. Правки вносить в скилл и запускать bootstrap заново, а не редактировать копию.
+- Перед написанием кода проверить существующие модули. Использовать подходящий; если новый реальный кейс требует небольшого обобщения — расширить модуль, сохранив прежнее поведение и проверив оба случая. Повторяемую или сложную логику предлагать сохранить. Не строить заранее универсальную обёртку над всем API mtcute.
+- `bot.ts` отвечает за жизненный цикл. Общие модули принимают готовый `tg` и явные параметры, возвращают результат, сами не открывают сессию и не завершают процесс. Адресаты, тексты, сценарий, вывод и `process.exit` остаются в скрипте. Использовать модуль необязательно, если прямой вызов проще.
+- Модули `lib/*.ts`, поставляемые скиллом, перезаписываются bootstrap'ом. Правки вносить в исходники скилла, затем запускать bootstrap; тесты — `bash "$SKILL_DIR/scripts/test.sh"`. Общие модули не должны содержать адресатов и данные конкретных задач; проектные сценарии сохранять в соответствующем проекте.
 - Отработавший скрипт удалять, если он не нужен для повторного использования.
+
+### Готовые модули
+
+- `lib/output.ts`: `writeOutput(text, stream?)` — дождаться записи stdout/stderr перед явным выходом.
+- `lib/updates.ts`: `readUpdateCursor(sessionPath)` до `withBot`; `readUpdates(tg, cursor)` — все страницы журнала или явный `history.update_gap`. Курсор автоматически не сохраняется.
+- `lib/messages.ts`: `readChatHistory(tg, chat)` — доступная история и `lastMessageId`; `getChannelLastMessageId`, `readCommonHistory`, `readMessageRange` — отдельные операции. Возвращаются raw TL-сообщения, включая служебные. Перед чтением истории или поиском последнего ID прочитать [references/history.md](references/history.md): там контракты, разные пути для типов чатов и ограничения полноты.
 
 ### Проверка типов
 
@@ -293,63 +299,30 @@ Marked-ID новой супергруппы считается как `-10000000
 Одноразовый `scratch/check-start.ts`:
 
 ```ts
-import { Database } from 'bun:sqlite'
 import { withBot, ROOT } from '../lib/bot'
+import { writeOutput } from '../lib/output'
+import { readUpdateCursor, readUpdates } from '../lib/updates'
 
-const db = new Database(`${ROOT}/session/bot`, { readonly: true })
-
-const readState = (key: string): number => {
-  const row = db.query('select value from key_value where key = ?').get(key) as { value: Uint8Array } | null
-  if (!row) throw new Error(`Missing update state: ${key}`)
-  return Buffer.from(row.value).readInt32LE(0)
-}
-
-let cursor = {
-  pts: readState('updates_pts'),
-  qts: readState('updates_qts'),
-  date: readState('updates_date'),
-}
-db.close()
+const cursor = readUpdateCursor(`${ROOT}/session/bot`)
 
 await withBot(async tg => {
-  for (;;) {
-    const diff = await tg.call({ _: 'updates.getDifference', ...cursor })
+  const result = await readUpdates(tg, cursor)
+  if (!result.ok) throw new Error(JSON.stringify(result.error))
 
-    if (diff._ === 'updates.differenceTooLong') {
-      throw new Error(`Telegram update difference is too long: pts=${diff.pts}`)
-    }
-    if (diff._ === 'updates.differenceEmpty') return
-
-    for (const message of diff.newMessages) {
+  for (const page of result.value.pages) {
+    for (const message of page.newMessages) {
       if (message._ !== 'message' || message.out || !message.message.trim().startsWith('/start')) continue
-
       const sender = message.fromId ?? message.peerId
       if (sender._ !== 'peerUser') continue
-
       const peer = await tg.getPeer(sender.userId)
       const [reread] = await tg.getMessages(peer.id, [message.id])
       if (!reread || reread.text !== message.message || reread.isOutgoing) {
         throw new Error(`Failed to verify incoming /start message ${message.id}`)
       }
-
-      const output = JSON.stringify({
-        messageId: message.id,
-        date: message.date,
-        userId: peer.id,
-        displayName: peer.displayName,
-        username: peer.username,
-        text: message.message,
-      })
-      await new Promise<void>((resolve, reject) => {
-        process.stdout.write(output + '\n', error => error ? reject(error) : resolve())
-      })
-    }
-
-    if (diff._ === 'updates.difference') return
-    cursor = {
-      pts: diff.intermediateState.pts,
-      qts: diff.intermediateState.qts,
-      date: diff.intermediateState.date,
+      await writeOutput(JSON.stringify({
+        messageId: message.id, date: message.date, userId: peer.id,
+        displayName: peer.displayName, username: peer.username, text: message.message,
+      }) + '\n')
     }
   }
 })
@@ -416,23 +389,7 @@ const r = await tg.call({
 
 Потолок - **последние 20 постов**, глубже не пускает: `count` показывает реальный размер канала (проверено: 501), но `maxId` за пределами последней двадцатки возвращает пустой список. `limit` работает только внутри этого окна. То есть это свежая выжимка, а не архив.
 
-Обход отсутствия истории: последний ID ищется бинарным поиском, дальше читается всё подряд. Работает, потому что `getMessages` на несуществующий ID возвращает `null`, а не ошибку.
-
-```ts
-let lo = 1, hi = 4096
-while ((await tg.getMessages(chatId, [hi]))[0]) { lo = hi; hi *= 2 }
-while (lo + 1 < hi) {
-  const mid = (lo + hi) >> 1
-  if ((await tg.getMessages(chatId, [mid]))[0]) lo = mid; else hi = mid
-}
-const all = (await tg.getMessages(chatId, Array.from({ length: lo }, (_, i) => i + 1))).filter(Boolean)
-```
-
-Оценка снизу, а не точный ответ: если хвост удалён, поиск остановится на последнем живом. Для чата с тысячами сообщений так вычитывать всё не стоит.
-
-Дальше диапазон читается пачками по 100 ID за вызов. На реальном канале это сработало полностью: 13 запросов на поиск границы (последний ID 546), 6 пачек на выгрузку, на выходе 501 живое сообщение - остальные 45 ID удалены. Полнота проверяется бесплатно: `count` из `messages.getPersonalChannelHistory` для того же канала показал ровно 501. Всегда, когда есть независимый счётчик, сверяться с ним - это и есть проверка по разделу 5.
-
-Что доезжает в такой выгрузке: `id`, `date`, `editDate`, `text`, тип медиа, `views`, `forwards`, `groupedId` для альбомов. Что не доезжает: реакции.
+Для чтения истории и последнего ID использовать `lib/messages.ts` по [references/history.md](references/history.md). Бинарный поиск по существованию сообщения некорректен: удаление создаёт дырку, которая ничего не говорит о сообщениях справа. Ни экспоненциальный поиск, ни проверка соседних ID не дают гарантии.
 
 Сообщения по известным ID и полные объекты:
 
