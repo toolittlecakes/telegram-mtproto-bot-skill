@@ -353,6 +353,19 @@ const msg = await tg.sendText(chatId, thtml`<b>Заголовок</b>
 
 `html` из `@mtcute/bun` схлопывает переносы строк и повторные пробелы как браузер - многострочный пост превращается в одну простыню, а ошибки нет. Проверено на реальном посте: 49 строк ушли одним абзацем. `thtml` сохраняет whitespace как есть (поведение Bot API). Символы `<`, `>`, `&` в тексте экранировать как `&lt;`, `&gt;`, `&amp;`; лимит 4096 считается по чистому тексту без тегов, превышение - серверный `MESSAGE_TOO_LONG`. Проверка по разделу 5: перечитать сообщение и сверить `raw.entities.length` и число строк в `text`, а не только сам факт отправки.
 
+Сворачиваемая цитата: `<blockquote expandable>…</blockquote>` в `thtml`. Это ближайшая замена `<details>` в обычном сообщении; таблиц там нет вообще.
+
+**Rich message** - отдельный формат сообщения: заголовки, списки, GFM-таблицы, `<details>`-тогглы. По умолчанию не использовать, только по явной просьбе: дефолт - обычное форматирование (`thtml`) или `.md`-файл документом. Учитывать, что `<details>` в `.md`-файле превью Telegram тогглом не показывает. Обёртки в mtcute нет, сырой вызов (поле `available: both`):
+
+```ts
+await tg.call({
+  _: 'messages.sendMessage', peer: await tg.resolvePeer(chatId), message: '', randomId: Long.fromBits(Math.random() * 2 ** 32 | 0, Math.random() * 2 ** 31 | 0),
+  richMessage: { _: 'inputRichMessageMarkdown', markdown }, // есть и inputRichMessageHTML
+})
+```
+
+ID сообщения берётся из `updateMessageID` в ответе. Проверка: перечитать сообщение и обойти `raw.richMessage.blocks` - таблица приходит как `pageBlockTable`, тоггл как `pageBlockDetails`, а `message` остаётся пустым.
+
 Чтение форматирования. `text` у сообщения - голый текст, разметка лежит отдельно в `entities` (bold, italic, blockquote, code, textUrl). Если важно, что автор выделил, а не только что написал, разворачивать обратно в HTML:
 
 ```ts
